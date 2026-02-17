@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sound as Gravity – Waterfall</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #fff;
+        overflow: hidden;
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        cursor: none;
+      }
+      #canvas {
+        display: block;
+        position: fixed;
+        top: 0;
+        left: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <script>
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+
+      let W = window.innerWidth;
+      let H = window.innerHeight;
+      canvas.width = W;
+      canvas.height = H;
+      canvas.style.width = W + "px";
+      canvas.style.height = H + "px";
+
+      const SPOTS = [
+        {
+          file: "spot1.wav",
+          texts: [
+            "At the entrance to the park, the most immediately noticeable sound was the crunch of footsteps on snow.",
+          ],
+        },
+        {
+          file: "spot2.m4a",
+          texts: [
+            "Along the wooded path, wind brushing against branches produced brief, intermittent sounds.",
+          ],
+        },
+        {
+          file: "spot3.wav",
+          texts: [
+            "On the bridge, the sound of water rising from below filled the space more prominently than footsteps.",
+          ],
+        },
+        {
+          file: "spot4.wav",
+          texts: [
+            "Near the waterfall, a single sound occupied the entire space. The steady rhythm of falling water overwhelmed other sounds.",
+          ],
+        },
+        {
+          file: "spot5.m4a",
+          texts: [
+            "Inside the tunnel, wind noise intensified and revealed the form of the space.",
+          ],
+        },
+      ];
+
+      const statusEl = document.createElement("div");
+      statusEl.style.cssText =
+        "position:fixed;top:16px;left:16px;background:rgba(0,0,0,0.7);color:#fff;padding:8px 14px;border-radius:6px;font:12px Helvetica,sans-serif;z-index:999;pointer-events:none;";
+      statusEl.textContent = "Loading…";
+      document.body.appendChild(statusEl);
+
+      let audioCtx;
+      const colAudio = [];
+      let activeSpot = 0;
+      let activeSource = null;
+      const audioBuffers = [];
+
+      async function loadAllAudio() {
+        for (let i = 0; i < SPOTS.length; i++) {
+          const spot = SPOTS[i];
+          try {
+            const res = await fetch(spot.file);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const ab = await res.arrayBuffer();
+            const buf = await audioCtx.decodeAudioData(ab);
+            audioBuffers.push(buf);
+            console.log(`✓ Loaded ${spot.file}`);
+          } catch (e) {
+            console.warn(`✗ Failed to load ${spot.file}:`, e.message);
+            audioBuffers.push(null);
+          }
+        }
+        const loaded = audioBuffers.filter((b) => b !== null).length;
+        statusEl.textContent =
+          loaded > 0
+            ? `♪ Playing Spot 1 of 5`
+            : "✗ Audio files not found — place spot files in same folder";
+      }
+
+      function playSpot(idx) {
+        if (activeSource) {
+          activeSource.onended = null;
+          try {
+            activeSource.stop();
+          } catch (e) {}
+          activeSource = null;
+        }
+        activeSpot = idx;
+        const buf = audioBuffers[idx];
+        if (!buf) {
+          console.warn(`Spot ${idx + 1} buffer missing, skipping`);
+          setTimeout(() => playSpot((idx + 1) % 5), 500);
+          return;
+        }
+
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        colAudio[idx] = {
+          analyser,
+          dataArray,
+          bufferLength: analyser.frequencyBinCount,
+        };
+
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.loop = false;
+        src.connect(analyser);
+        analyser.connect(audioCtx.destination);
+        src.start(0);
+        activeSource = src;
+
+        statusEl.textContent = `♪ Spot ${idx + 1} — ${SPOTS[idx].texts[0]}`;
+
+        src.onended = () => {
+          colAudio[idx] = null;
+          playSpot((idx + 1) % 5);
+        };
+        console.log(`▶ Playing Spot ${idx + 1}: ${SPOTS[idx].file}`);
+      }
+
+      async function initAudio() {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") await audioCtx.resume();
+        statusEl.textContent = "Loading audio files…";
+        await loadAllAudio();
+        playSpot(0);
+      }
+
+      function getColAmplitude(colIdx) {
+        const a = colAudio[colIdx];
+        if (!a || !a.analyser) return 0;
+        a.analyser.getByteFrequencyData(a.dataArray);
+        let sum = 0;
+        for (let i = 0; i < a.bufferLength; i++) sum += a.dataArray[i];
+        return sum / a.bufferLength / 255;
+      }
+
+      // ── Z 공간 상수 ──────────────────────────────────────────────
+      const Z_MAX = 6000;
+
+      class Letter {
+        constructor(x, z, char) {
+          this.baseX = x;
+          this.z = z;
+          this.char = char;
+        }
+        update(speed) {
+          this.z -= speed;
+          if (this.z < 50) this.z += Z_MAX;
+        }
+        draw(curvature, color, camX, camZ) {
+          // 카메라 Z가 앞으로 들어오면(+) 상대 Z가 줄어들어서 글자가 커짐
+          const zRel = this.z - (camZ || 0);
+          if (zRel <= 60) return; // 너무 가까우면 컷(폭발 방지)
+
+          // 화면 Y도 카메라 Z에 반응하도록 상대 깊이로 계산
+          const depthRatio = Math.max(0, Math.min(1, zRel / Z_MAX));
+          const screenY = (1 - depthRatio) * H;
+
+          const curveStart = 0.55;
+          let xCurve = 0;
+          if (depthRatio < curveStart) {
+            const n = (curveStart - depthRatio) / curveStart;
+            xCurve = Math.pow(n, 1.8) * curvature;
+          }
+
+          const curvedX = this.baseX + xCurve + (camX || 0);
+
+          // ✅ 핵심: scale을 (this.z - cameraZ) 기준으로
+          const scale = 600 / zRel;
+          const screenX = (curvedX - W / 2) * scale + W / 2;
+          const size = Math.max(14, Math.min(80 * scale, 140));
+
+          if (screenX < -400 || screenX > W + 400) return;
+          if (screenY < -120 || screenY > H + 120) return;
+
+          ctx.save();
+          ctx.fillStyle = color || "#000";
+          ctx.font = `700 ${size}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.translate(screenX, screenY);
+          ctx.rotate(Math.PI / 2);
+          ctx.fillText(this.char, 0, 0);
+          ctx.restore();
+        }
+      }
+
+      class Column {
+        constructor(x, texts, curveDir, spotIdx) {
+          this.x = x;
+          this.texts = texts;
+          this.curveDir = curveDir;
+          this.spotIdx = spotIdx;
+          this.letters = [];
+          this._build();
+        }
+        _build() {
+          const spacing = 70;
+          let z = 100;
+          let phraseIdx = 0;
+          while (z < Z_MAX) {
+            const phrase = this.texts[phraseIdx % this.texts.length];
+            phraseIdx++;
+            const chars = [...phrase].reverse();
+            for (const ch of chars) {
+              this.letters.push(new Letter(this.x, z, ch));
+              z += spacing;
+            }
+            z += spacing * 1.5;
+          }
+        }
+        update() {
+          const amp = getColAmplitude(this.spotIdx);
+          const isActive = this.spotIdx === activeSpot;
+          const speed = isActive ? 0.5 + amp * 12 : 0.2;
+          this.letters.forEach((l) => l.update(speed));
+        }
+        draw(baseCurvature, camX, camZ) {
+          const curvature = baseCurvature * this.curveDir;
+          const isActive = this.spotIdx === activeSpot;
+          const color = isActive ? "#1a6dff" : "#888888";
+          this.letters.sort((a, b) => b.z - a.z);
+          this.letters.forEach((l) => l.draw(curvature, color, camX, camZ));
+        }
+      }
+
+      let columns = [];
+
+      function initColumns() {
+        columns = [];
+        const NUM = 5;
+        const SPREAD = 600;
+        for (let i = 0; i < NUM; i++) {
+          const t = i / (NUM - 1);
+          const x = W / 2 + (t - 0.5) * SPREAD;
+          const curveDir = (t - 0.5) * 2;
+          columns.push(new Column(x, SPOTS[i].texts, curveDir, i));
+        }
+      }
+
+      function resizeCanvas() {
+        W = window.innerWidth;
+        H = window.innerHeight;
+        canvas.width = W;
+        canvas.height = H;
+        canvas.style.width = W + "px";
+        canvas.style.height = H + "px";
+        if (columns.length > 0) initColumns();
+      }
+      window.addEventListener("resize", resizeCanvas);
+
+      // ── Camera offsets ───────────────────────────────────────────
+      // X: 활성 컬럼을 중앙으로
+      let cameraX = 0;
+      let targetCameraX = 0;
+
+      // Z: 사운드가 커질수록 카메라가 앞으로 "돌진"
+      let cameraZ = 0;
+      let targetCameraZ = 0;
+
+      function updateCameraX() {
+        if (columns.length > 0) {
+          const activeCol = columns[activeSpot];
+          targetCameraX = W / 2 - activeCol.x;
+        }
+        cameraX += (targetCameraX - cameraX) * 0.04;
+      }
+
+      function updateCameraZ(avgAmp) {
+        // 사운드 전체 평균 진폭으로 Z 목표값 만들기
+        targetCameraZ = avgAmp * 600;
+        cameraZ += (targetCameraZ - cameraZ) * 0.08;
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        let totalAmp = 0;
+        for (let i = 0; i < 5; i++) totalAmp += getColAmplitude(i);
+        const avgAmp = totalAmp / 5;
+
+        const baseCurvature = 40 + avgAmp * 80;
+
+        updateCameraX();
+        updateCameraZ(avgAmp);
+
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, W, H);
+
+        columns.forEach((col) => {
+          col.update();
+          if (col.spotIdx !== activeSpot)
+            col.draw(baseCurvature, cameraX, cameraZ);
+        });
+        columns.forEach((col) => {
+          if (col.spotIdx === activeSpot)
+            col.draw(baseCurvature, cameraX, cameraZ);
+        });
+      }
+
+      async function init() {
+        initColumns();
+        animate();
+        try {
+          await initAudio();
+        } catch (e) {
+          statusEl.textContent = "▶ Click to start audio";
+          document.addEventListener(
+            "click",
+            async () => {
+              if (!audioCtx) await initAudio();
+              else if (audioCtx.state === "suspended") await audioCtx.resume();
+            },
+            { once: true },
+          );
+        }
+      }
+
+      window.addEventListener("load", init);
+    </script>
+  </body>
+</html>
