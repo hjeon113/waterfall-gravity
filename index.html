@@ -73,7 +73,7 @@
       const statusEl = document.createElement("div");
       statusEl.style.cssText =
         "position:fixed;top:16px;left:16px;background:rgba(0,0,0,0.7);color:#fff;padding:8px 14px;border-radius:6px;font:12px Helvetica,sans-serif;z-index:999;pointer-events:none;";
-      statusEl.textContent = "Loading…";
+      statusEl.textContent = "▶ Click anywhere to start";
       document.body.appendChild(statusEl);
 
       let audioCtx;
@@ -163,7 +163,6 @@
         return sum / a.bufferLength / 255;
       }
 
-      // ── Z 공간 상수 ──────────────────────────────────────────────
       const Z_MAX = 6000;
 
       class Letter {
@@ -177,11 +176,9 @@
           if (this.z < 50) this.z += Z_MAX;
         }
         draw(curvature, color, camX, camZ) {
-          // 카메라 Z가 앞으로 들어오면(+) 상대 Z가 줄어들어서 글자가 커짐
           const zRel = this.z - (camZ || 0);
-          if (zRel <= 60) return; // 너무 가까우면 컷(폭발 방지)
+          if (zRel <= 60) return;
 
-          // 화면 Y도 카메라 Z에 반응하도록 상대 깊이로 계산
           const depthRatio = Math.max(0, Math.min(1, zRel / Z_MAX));
           const screenY = (1 - depthRatio) * H;
 
@@ -194,7 +191,6 @@
 
           const curvedX = this.baseX + xCurve + (camX || 0);
 
-          // ✅ 핵심: scale을 (this.z - cameraZ) 기준으로
           const scale = 600 / zRel;
           const screenX = (curvedX - W / 2) * scale + W / 2;
           const size = Math.max(14, Math.min(80 * scale, 140));
@@ -278,12 +274,8 @@
       }
       window.addEventListener("resize", resizeCanvas);
 
-      // ── Camera offsets ───────────────────────────────────────────
-      // X: 활성 컬럼을 중앙으로
       let cameraX = 0;
       let targetCameraX = 0;
-
-      // Z: 사운드가 커질수록 카메라가 앞으로 "돌진"
       let cameraZ = 0;
       let targetCameraZ = 0;
 
@@ -296,7 +288,6 @@
       }
 
       function updateCameraZ(avgAmp) {
-        // 사운드 전체 평균 진폭으로 Z 목표값 만들기
         targetCameraZ = avgAmp * 600;
         cameraZ += (targetCameraZ - cameraZ) * 0.08;
       }
@@ -327,25 +318,25 @@
         });
       }
 
-      async function init() {
+      // ── 초기화: 클릭 후 오디오 시작 ──────────────────────────────
+      window.addEventListener("load", () => {
         initColumns();
         animate();
-        try {
-          await initAudio();
-        } catch (e) {
-          statusEl.textContent = "▶ Click to start audio";
-          document.addEventListener(
-            "click",
-            async () => {
-              if (!audioCtx) await initAudio();
-              else if (audioCtx.state === "suspended") await audioCtx.resume();
-            },
-            { once: true },
-          );
-        }
-      }
 
-      window.addEventListener("load", init);
+        statusEl.style.pointerEvents = "auto";
+        statusEl.style.cursor = "pointer";
+
+        document.addEventListener("click", async () => {
+          statusEl.style.pointerEvents = "none";
+          statusEl.style.cursor = "default";
+          try {
+            await initAudio();
+          } catch (e) {
+            console.error("Audio init failed:", e);
+            statusEl.textContent = "✗ Audio failed to load";
+          }
+        }, { once: true });
+      });
     </script>
   </body>
 </html>
